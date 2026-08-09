@@ -62,23 +62,61 @@ FlyRank parsing, study-notes present/absent, ambiguous status flags, quiz from
 supplied notes (and no-quiz without notes), read-only source files, and
 “GitHub Issue NOT attempted when report generation fails”.
 
-## 5. How GitHub Actions works
+## 5. Real-data GitHub Actions
 
-The workflow `.github/workflows/weekly-report.yml` is already configured with:
+GitHub Actions cannot directly access the local git-ignored `data/` directory
+on the user's computer. The workflow therefore receives the three personal
+input files through encrypted GitHub repository secrets.
 
-- `workflow_dispatch` (manual run)
-- a Sunday 18:00 UTC `cron` schedule
-- `permissions: issues: write`
-- the built-in `GITHUB_TOKEN` and `github.repository`
+### Create the three encrypted repository secrets
 
-**Important privacy/design note:** GitHub Actions runs on GitHub's servers and
-does **not** have access to your laptop's `data/` files (and those files are
-git-ignored anyway, so they are not in the repository). The workflow therefore
-runs in **DEMO mode**: it reads the committed TEST FIXTURE feed
-(`tests/fixtures/*`), sets `DEMO_MODE=true`, and the report it posts states
-explicitly that it is a fixture-based demo, never personal data. This is an
-honest, working pipeline demo — it is not a real connection to your personal
-tracker.
+Create each of these three secrets, with the value set to the **complete
+contents** of the matching local file:
+
+| Secret name | Value = complete contents of |
+| ----------- | ---------------------------- |
+| `JOB_APPLICATIONS_DATA` | `data/job_applications.csv` |
+| `FLYRANK_PROGRESS_DATA` | `data/flyrank_progress.md` |
+| `STUDY_NOTES_DATA` | `data/study_notes.md` |
+
+Steps for each secret:
+
+1. Go to the GitHub repository.
+2. Open **Settings**.
+3. Open **Secrets and variables**.
+4. Open **Actions**.
+5. Click **New repository secret**.
+6. Enter the exact secret name from the table (e.g. `JOB_APPLICATIONS_DATA`).
+7. Copy the COMPLETE contents of the corresponding local file.
+8. Paste the content into the secret **Value** field.
+9. Save it.
+10. Repeat for all three files.
+
+The three files were checked and are all well below the GitHub
+repository-secret size limit (64 KB per secret).
+
+### What the workflow does on each run
+
+1. GitHub Actions starts (Sunday 18:00 UTC cron, or manual `workflow_dispatch`).
+2. The three encrypted secrets are provided to the workflow.
+3. The workflow creates a temporary directory on the runner.
+4. The secret values are written into temporary files inside that directory.
+5. The existing Python agent reads those temporary files.
+6. `DEMO_MODE=false` is used, so the report is built from real personal data.
+7. The report is generated from the real personal data.
+8. The built-in `GITHUB_TOKEN` creates exactly one GitHub Issue.
+9. The temporary files are deleted after the run (success or failure).
+
+### Privacy guarantees
+
+- `data/` remains git-ignored; personal data is never committed to or pushed
+  to the repository.
+- The workflow does not access your laptop; data travels only as encrypted
+  secrets and ephemeral runner temp files.
+- No old Google Sheet CSV URL is used, and no revoked PAT is used — the
+  workflow uses the built-in GitHub Actions token (`issues: write`).
+- If input loading or report generation fails, the workflow exits non-zero
+  and no Issue is created.
 
 ## 6. What data is required / how it stays read-only
 
@@ -92,8 +130,20 @@ tracker.
 
 ## 7. Manual GitHub test
 
-1. In your repo, **Actions → Weekly Personal Ops Report → Run workflow**.
-2. Expect: workflow success; exactly one Issue; title `Weekly Ops Report — YYYY-MM-DD`; body = the DEMO report.
+1. Open the repository on GitHub.
+2. Go to **Actions**.
+3. Select **Weekly Personal Ops Report**.
+4. Click **Run workflow**.
+5. Wait for the workflow to finish.
+6. Expected result:
+   - workflow succeeds
+   - one new Issue is created
+   - Issue title follows the agent's convention: `Weekly Ops Report — YYYY-MM-DD`
+   - Issue body contains the real weekly report generated from the three
+     encrypted secrets
+   - the report does NOT contain the DEMO banner
+   - the report does NOT contain fixture data
 
-Do not claim a real Google Sheets / personal-data connection — there is none in
-this MVP by design, and none should be added until you have a real source.
+Do not claim that the workflow reads the local `data/` folder directly — it
+receives personal data through the encrypted repository secrets described in
+Section 5.

@@ -14,6 +14,7 @@ permissions:
 jobs:
   weekly-report:
     runs-on: ubuntu-latest
+
     steps:
       - name: Check out the repository
         uses: actions/checkout@v4
@@ -26,15 +27,41 @@ jobs:
       - name: Install dependencies
         run: python -m pip install -r requirements.txt
 
-      - name: Generate report and create GitHub Issue
-        run: python main.py
+      - name: Generate real-data report and create GitHub Issue
         env:
-          # GitHub Actions cannot access your laptop's private data/ files.
-          # This run therefore uses the committed TEST FIXTURE feed and marks
-          # the output as DEMO so the Issue is never mistaken for personal data.
-          JOB_APPLICATIONS_FILE: tests/fixtures/job_applications.csv
-          FLYRANK_PROGRESS_FILE: tests/fixtures/flyrank_progress.md
-          STUDY_NOTES_FILE: tests/fixtures/study_notes.md
-          DEMO_MODE: "true"
+          JOB_APPLICATIONS_DATA: ${{ secrets.JOB_APPLICATIONS_DATA }}
+          FLYRANK_PROGRESS_DATA: ${{ secrets.FLYRANK_PROGRESS_DATA }}
+          STUDY_NOTES_DATA: ${{ secrets.STUDY_NOTES_DATA }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
+
+        run: |
+          set -euo pipefail
+
+          # Fail if any required personal-data secret is missing.
+          for name in JOB_APPLICATIONS_DATA FLYRANK_PROGRESS_DATA STUDY_NOTES_DATA; do
+            if [ -z "${!name}" ]; then
+              echo "::error::Secret $name is empty — create it in Settings → Secrets and variables."
+              exit 1
+            fi
+          done
+
+          # Create an ephemeral directory on the GitHub runner.
+          DATA_DIR="$(mktemp -d "${RUNNER_TEMP}/ops-coach.XXXXXX")"
+
+          # Always delete personal data after the workflow step finishes.
+          trap 'rm -rf "$DATA_DIR"' EXIT
+
+          # Materialize the encrypted secrets as temporary files.
+          # Do not echo the secret values.
+          printf '%s' "$JOB_APPLICATIONS_DATA" > "$DATA_DIR/job_applications.csv"
+          printf '%s' "$FLYRANK_PROGRESS_DATA" > "$DATA_DIR/flyrank_progress.md"
+          printf '%s' "$STUDY_NOTES_DATA" > "$DATA_DIR/study_notes.md"
+
+          # Run the existing agent against the temporary personal-data files.
+          # DEMO_MODE=false means this is a real-data run.
+          JOB_APPLICATIONS_FILE="$DATA_DIR/job_applications.csv" \
+          FLYRANK_PROGRESS_FILE="$DATA_DIR/flyrank_progress.md" \
+          STUDY_NOTES_FILE="$DATA_DIR/study_notes.md" \
+          DEMO_MODE=false \
+          python main.py

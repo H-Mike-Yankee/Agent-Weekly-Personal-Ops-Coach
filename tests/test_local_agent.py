@@ -13,6 +13,7 @@ import io
 import os
 import re
 import sys
+import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from datetime import date
@@ -468,6 +469,77 @@ class TestGitHubNotifyMocked(unittest.TestCase):
     def test_create_issue_rejects_bad_repository(self):
         with self.assertRaises(github_notify.GitHubNotifyError):
             github_notify.create_issue("body", date(2026, 8, 9), "token", "wrong-shape")
+
+
+# ---------------------------------------------------------------------------
+# Secret-materialized real-data inputs
+# ---------------------------------------------------------------------------
+
+
+class TestMaterializedSecretInputs(unittest.TestCase):
+    """
+    Mirrors the GitHub Actions real-data workflow.
+
+    The test copies the existing fixture inputs into a temporary directory,
+    points the pipeline at those temporary files, and verifies that
+    DEMO_MODE=false produces a normal report without a DEMO banner.
+
+    No network is used.
+    """
+
+    def test_materialized_inputs_generate_real_report(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for name in (
+                "job_applications.csv",
+                "flyrank_progress.md",
+                "study_notes.md",
+            ):
+                Path(tmp, name).write_text(
+                    inputs.read_local_file(fixture(name)),
+                    encoding="utf-8",
+                )
+
+            cfg = {
+                "jobs_file": str(Path(tmp, "job_applications.csv")),
+                "flyrank_file": str(Path(tmp, "flyrank_progress.md")),
+                "study_file": str(Path(tmp, "study_notes.md")),
+                "demo_mode": False,
+            }
+
+            result = main.run_pipeline(cfg)
+            text = result["text"]
+
+            self.assertIn("Globex Inc [FIXTURE]", text)
+            self.assertIn("2 done", text)
+            self.assertNotIn("DEMO", text.upper())
+
+    def test_materialized_empty_csv_blocks_issue(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            jobs = Path(tmp, "job_applications.csv")
+            jobs.write_text("", encoding="utf-8")
+
+            env = {
+                "JOB_APPLICATIONS_FILE": str(jobs),
+                "FLYRANK_PROGRESS_FILE": fixture("flyrank_progress.md"),
+                "STUDY_NOTES_FILE": fixture("study_notes.md"),
+                "DRY_RUN": "",
+                "DEMO_MODE": "false",
+                "GITHUB_TOKEN": "fake-token",
+                "GITHUB_REPOSITORY": "owner/repo",
+            }
+
+            with mock.patch.dict(os.environ, env, clear=False):
+                with mock.patch.object(
+                    main.github_notify,
+                    "create_issue",
+                ) as create_issue:
+                    with redirect_stdout(io.StringIO()), redirect_stderr(
+                        io.StringIO()
+                    ):
+                        code = main.run()
+
+                    self.assertNotEqual(code, 0)
+                    create_issue.assert_not_called()
 
 
 if __name__ == "__main__":
