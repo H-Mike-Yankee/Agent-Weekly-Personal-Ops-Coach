@@ -152,22 +152,35 @@ def parse_flyrank(text):
 # Deterministic quiz extraction (from supplied notes only)
 # --------------------------------------------------------------------------
 
-QUESTION_RE = re.compile(r"^(?:q|question)\d*\s*[:.-]+\s*(.+)$", re.I)
-ANSWER_RE = re.compile(r"^(?:a|ans|answer)\s*[:.-]+\s*(.+)$", re.I)
+QUESTION_RE = re.compile(r"^(?:q|question)\d*\s*[:.\-]+\*{0,2}\s*(.+)$", re.I)
+ANSWER_RE = re.compile(r"^(?:a|ans|answer)\d*\s*[:.\-]+\*{0,2}\s*(.+)$", re.I)
 HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$")
-BULLET_RE = re.compile(r"^\s*[-*+]\s+(.+)$")
-DEF_SEP_RE = re.compile(r"^(.+?)\s*(?::|—|–|-)\s+(.+)$")
+# Bullet markers: "-", "*", "+", or numbered lists ("1.", "1)").
+BULLET_RE = re.compile(r"^\s*(?:[-*+]|\d{1,3}[.)])\s+(.+)$")
+# Definition separators: colon, em dash, en dash, or a hyphen with spaces
+# around it ("Term: explanation", "Term — explanation", "Term - one").
+# A bare hyphen *inside* a word ("Breadth-first") is NOT a separator.
+DEF_SEP_RE = re.compile(r"^(.+?)(?:\s*[:—–]\s+|\s+-\s+)(.+)$")
+# Leading Markdown emphasis around a label, e.g. "**Q:**", "*A:*".
+STRIP_MD_PREFIX_RE = re.compile(r"^\*{1,3}\s*")
 
 NO_QUIZ_NOTES = "No study activity logged this week; no quiz generated."
+
+
+def _strip_md_prefix(line):
+    """Remove leading Markdown emphasis such as `**` around a Q/A label."""
+    return STRIP_MD_PREFIX_RE.sub("", line.strip()).strip()
 
 
 def extract_quiz(notes_text):
     """Build up to 5 quiz items straight from the supplied study notes.
 
     Strategies, in order:
-      1. Explicit Q/A lines (`Q: ...` / `A: ...` or `**Q:** ...` / `**A:** ...`).
-      2. Definition-style bullets (`Term — explanation`).
-      3. Headings that have bullet content beneath them.
+      1. Explicit Q/A lines: `Q: …` / `A: …`, `Question: …` / `Answer: …`,
+         numbered `Q1. …` / `A1. …`, optionally wrapped in Markdown emphasis
+         (``**Q:** …`` / ``*A:* …``).
+      2. Definition-style bullets (`Term: explanation`, `Term — explanation`).
+      3. Headings that have bullet content beneath them, as an open-book cue.
 
     Returns [] when the notes contain no structured study material.
     """
@@ -183,24 +196,30 @@ def extract_quiz(notes_text):
             seen.add(text)
             items.append(text)
 
-    # 1) Explicit Q/A pairs.
+    # 1) Explicit Q/A pairs (a Q may be followed by its A a few lines later,
+    #    e.g. wrapped across multiple lines with blank lines between).
     i = 0
     while i < len(lines):
-        q_match = QUESTION_RE.match(lines[i].strip())
+        q_match = QUESTION_RE.match(_strip_md_prefix(lines[i]))
         if q_match:
             question = q_match.group(1).strip()
             answer = None
-            for j in range(i + 1, min(i + 4, len(lines))):
-                a_match = ANSWER_RE.match(lines[j].strip())
+            for j in range(i + 1, min(i + 6, len(lines))):
+                a_match = ANSWER_RE.match(_strip_md_prefix(lines[j]))
                 if a_match:
                     answer = a_match.group(1).strip()
-                    i = j + 1
+                    i = j + 1  # skip past the matched answer line
                     break
+            else:
+                # No answer found below: still keep the recalled question, but
+                # always advance past it so the scan cannot loop forever.
+                i += 1
             add(f"Q: {question}" + (f" — A: {answer}" if answer else ""))
             continue
         i += 1
 
-    # 2) Definition-style bullets: "Term — explanation".
+    # 2) Definition-style bullets: "Term — explanation" (bare in-word
+    #    hyphens such as "Breadth-first" are not treated as separators).
     for line in lines:
         bullet = BULLET_RE.match(line)
         if not bullet:
@@ -209,7 +228,8 @@ def extract_quiz(notes_text):
         if sep:
             add(f"Define: {sep.group(1).strip()} (from your study notes).")
 
-    # 3) Headings that contain at least one bullet beneath them.
+    # 3) Headings that contain at least one bullet / numbered item beneath
+    #    them — an open-ended recall cue, never a made-up fact.
     for idx, line in enumerate(lines):
         head = HEADING_RE.match(line)
         if not head:

@@ -264,6 +264,86 @@ class TestQuizSourceDiscipline(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# 10b. Improved study-note parsing (Q/A variants, definitions, numbered lists)
+# ---------------------------------------------------------------------------
+
+
+class TestImprovedQuizParsing(unittest.TestCase):
+    def test_bold_qa_pairs(self):
+        text = "**Q:** What is 2 + 2?\n**A:** 4\n"
+        quiz = report.extract_quiz(text)
+        self.assertIn("Q: What is 2 + 2? — A: 4", quiz)
+
+    def test_question_answer_labels(self):
+        text = (
+            "Question: Describe a binary search tree.\n"
+            "Answer: A node-based tree where left comes before right.\n"
+        )
+        quiz = report.extract_quiz(text)
+        self.assertIn(
+            "Q: Describe a binary search tree. — A: A node-based tree where "
+            "left comes before right.",
+            quiz,
+        )
+
+    def test_numbered_qa_labels(self):
+        text = "Q1. What is O(1)?\nA1. Constant-time complexity.\n"
+        quiz = report.extract_quiz(text)
+        self.assertIn("Q: What is O(1)? — A: Constant-time complexity.", quiz)
+
+    def test_definition_colon_variants(self):
+        text = "- Influx: a queue is FIFO.\n"
+        quiz = report.extract_quiz(text)
+        self.assertIn("Define: Influx (from your study notes).", quiz)
+
+    def test_definition_em_dash_variants(self):
+        text = "- Queue — FIFO data structure.\n"
+        quiz = report.extract_quiz(text)
+        self.assertIn("Define: Queue (from your study notes).", quiz)
+
+    def test_definition_spaced_hyphen_only(self):
+        text = "- Hash table - key value storage.\n"
+        quiz = report.extract_quiz(text)
+        self.assertIn("Define: Hash table (from your study notes).", quiz)
+
+    def test_inword_hyphen_not_a_separator(self):
+        text = "- Breadth-first search uses a FIFO queue.\n"
+        # The hyphen inside "Breadth-first" must NOT split into a definition.
+        self.assertNotIn("Define: Breadth", report.extract_quiz(text))
+
+    def test_numbered_list_under_heading(self):
+        text = "## Grocery List\n1. Apples\n2. Bread\n"
+        quiz = report.extract_quiz(text)
+        self.assertTrue(any("Grocery List" in item for item in quiz))
+
+    def test_answers_far_below_question(self):
+        text = (
+            "Q: How many wings does a swan have?\n"
+            "\n"
+            "\n"
+            "\n"
+            "A: Two.\n"
+        )
+        quiz = report.extract_quiz(text)
+        self.assertIn("Q: How many wings does a swan have? — A: Two.", quiz)
+
+    def test_literal_answers_too_far_are_not_invented(self):
+        text = "Q: Is a missing answer still included?\n"
+        quiz = report.extract_quiz(text)
+        # Question without an answer is still a legitimate recall cue, but the
+        # item must never invent an answer.
+        self.assertIn("Q: Is a missing answer still included?", quiz[0])
+
+    def test_fixture_quiz_items_are_source_only(self):
+        text = inputs.read_local_file(fixture("study_notes.md"))
+        quiz = report.extract_quiz(text)
+        for item in quiz:
+            tokens = re.findall(r"[A-Za-z][A-Za-z ]+", item)
+            ok = any(tok.strip() and tok.strip() in text for tok in tokens)
+            self.assertTrue(ok, f"quiz item looks invented: {item!r}")
+
+
+# ---------------------------------------------------------------------------
 # 11. Source files remain read-only
 # ---------------------------------------------------------------------------
 
