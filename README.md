@@ -1,111 +1,99 @@
 # Agent Weekly Personal Ops Coach
 
-A small, scheduled Python agent that checks your **Job Applications Tracker**
-Google Sheet for overdue follow-ups and posts the result as a new GitHub Issue
-once a week.
+A scheduled, read-only Python agent that synthesizes three local inputs —
+**job-search activity**, **FlyRank internship/coursework progress**, and
+**study notes** — into ONE consolidated weekly review, and posts that review
+as a new GitHub Issue.
 
-## A. What the agent does
+This is an MVP. It is deterministic and free: the report and the quiz are
+built with plain Python (f-strings, templates, loops, `datetime`). There is
+no AI API, no database, no web UI, no email, no Google/OAuth/Google-Cloud
+dependency, and no ability to modify any source file.
 
-1. Fetches your Google Sheet **published as CSV** (read-only).
-2. Parses each row: `Company`, `Role`, `Date Applied`, `Status`, `Follow-up Date`.
-3. Compares each `Follow-up Date` with today's date.
-4. Flags rows that are **overdue** and counts the exact number of days overdue.
-5. Sorts overdue rows from most-overdue to least-overdue.
-6. Flags rows with a missing/invalid date instead of crashing.
-7. Builds a plain-Python report (no AI, no external services).
-8. Creates one **new GitHub Issue** with that report.
-9. Never writes to or modifies the Google Sheet.
+## 1. What the agent reads (LOCAL, read-only)
 
-The report is generated with normal Python (f-strings, templates, loops, `datetime`)
-— there is no AI-generated prose anywhere.
+Put your **personal** files under `data/` — that folder is git-ignored and
+never pushed to GitHub.
 
-## A. What the agent does / B. Google Sheet setup
+| Env var                  | Default file                    | Format                                                      |
+| ----------------------- | ------------------------------- | ----------------------------------------------------------- |
+| `JOB_APPLICATIONS_FILE` | `data/job_applications.csv`     | CSV with headers `Company,Role,Date Applied,Status,Follow-up Date,JD Link` |
+| `FLYRANK_PROGRESS_FILE` | `data/flyrank_progress.md`      | Markdown, one assignment per `- [x]` (done), `- [ ]` (pending), `- [!]` (at-risk) line |
+| `STUDY_NOTES_FILE`      | `data/study_notes.md`           | Markdown with headings, Q/A lines, definitions |
 
-The agent only reads. Set up the Sheet so it can be fetched as a read-only CSV:
+Fallback: the committed example feed under `tests/fixtures/` (labelled TEST
+FIXTURE data) can be used for a safe local demo, or by GitHub Actions.
 
-1. Open **Job Applications Tracker** in Google Sheets.
-2. **File → Share → Publish to web**.
-3. Choose **CSV**.
-4. Copy the link.
+## 2. Setup
 
-That published CSV URL is **read-only**: the code in this repo only ever issues
-`GET` requests to it and contains no Google Sheets API / OAuth / write code
-(guardrail: `sheet_reader.py` has no write capability).
-
-## C. GitHub secret
-
-The workflow reads the published CSV URL from a repository secret:
-
-1. Repository **Settings → Secrets and variables → Actions → New repository secret**.
-2. **Name:** `SHEET_CSV_URL`
-3. **Value:** the published CSV URL you copied above.
-
-`GITHUB_TOKEN` and `GITHUB_REPOSITORY` are provided automatically by GitHub
-Actions — **no personal access token is required**.
-
-## D. Manual GitHub Actions test
-
-1. Repository **Actions** tab.
-2. Select the **Weekly Personal Ops Report** workflow.
-3. Click **Run workflow**.
-4. Watch the run: it should install dependencies, fetch the CSV, generate the
-   report, and create **exactly one** GitHub issue.
-
-## E. Automatic schedule
-
-The workflow also runs automatically **every Sunday at 18:00 UTC**
-(`cron: "0 18 * * 0"`). GitHub Actions scheduled jobs run in **UTC**.
-
-## F. Local testing
-
-> ⚠️ **Safety note:** `python main.py` creates a **real GitHub issue**
-> (every successful run posts a new issue). For local testing you can either
-> (a) put a dummy `GITHUB_TOKEN` in `.env` and rely on the included unit tests,
-> or (b) point `.env` at a scratch repo/token. The included test suite uses
-> mocks/fakes and never creates issues.
-
-1. Copy `.env.example` to `.env` and fill it in (`.env` is git-ignored).
-2. Install dependencies:
-
+1. Clone / open this project.
+2. Copy env template and fill it in:
+   ```bash
+   cp .env.example .env
+   ```
+   `.env` is **untracked by git** (see `.gitignore`). Keys you actually need
+   locally: the three file paths above (defaults already point to `data/`),
+   plus `DRY_RUN=true` for safe testing.
+3. Install:
    ```bash
    python -m pip install -r requirements.txt
    ```
 
-3. Run the agent:
+## 3. Run locally (+ sample data)
 
-   ```bash
-   python main.py
-   ```
-
-4. Run the local tests (no network, no GitHub calls):
-
-   ```bash
-   python -m unittest discover -s tests
-   ```
-
-## G. Architecture
-
-```
-Google Sheet (published CSV, read-only)
-        ↓
-sheet_reader.py   (fetch + parse + validate columns)
-        ↓
-main.py           (pipeline orchestration, today's date)
-        ↓
-report.py         (overdue detection + plain-Python report)
-        ↓
-github_notify.py  (GitHub REST API → new Issue)
-        ↓
-GitHub Issue → GitHub notification
+```bash
+python main.py
 ```
 
-## Environment variables
+- With `data/` filled in, this reads your personal files and — unless you set
+  `DRY_RUN=true` — **posts a real GitHub Issue** (requires `GITHUB_TOKEN` and
+  `GITHUB_REPOSITORY`).
+- With `DRY_RUN=true` it prints the weekly report and stops (recommended for
+  a first run). Unit tests also run entirely offline and post nothing.
 
-| Variable            | Local            | GitHub Actions                        |
-| ------------------- | ---------------- | ------------------------------------- |
-| `SHEET_CSV_URL`     | `.env`           | `secrets.SHEET_CSV_URL` (you set it) |
-| `GITHUB_TOKEN`      | `.env` (dummy ok for tests) | `secrets.GITHUB_TOKEN` (built-in) |
-| `GITHUB_REPOSITORY` | `.env`           | `github.repository`                   |
+## 4. Run the tests (no network needed)
 
-`.env.example` holds placeholders only; the real `.env` is ignored by git.
-Never commit real credentials.
+```bash
+python -m unittest discover -s tests -v
+```
+
+This exercises: 2-overdue, 0-overdue, missing follow-up date, invalid input,
+FlyRank parsing, study-notes present/absent, ambiguous status flags, quiz from
+supplied notes (and no-quiz without notes), read-only source files, and
+“GitHub Issue NOT attempted when report generation fails”.
+
+## 5. How GitHub Actions works
+
+The workflow `.github/workflows/weekly-report.yml` is already configured with:
+
+- `workflow_dispatch` (manual run)
+- a Sunday 18:00 UTC `cron` schedule
+- `permissions: issues: write`
+- the built-in `GITHUB_TOKEN` and `github.repository`
+
+**Important privacy/design note:** GitHub Actions runs on GitHub's servers and
+does **not** have access to your laptop's `data/` files (and those files are
+git-ignored anyway, so they are not in the repository). The workflow therefore
+runs in **DEMO mode**: it reads the committed TEST FIXTURE feed
+(`tests/fixtures/*`), sets `DEMO_MODE=true`, and the report it posts states
+explicitly that it is a fixture-based demo, never personal data. This is an
+honest, working pipeline demo — it is not a real connection to your personal
+tracker.
+
+## 6. What data is required / how it stays read-only
+
+- Every input is opened with `open(..., "r")` only. The agent cannot write to
+  or delete any source file (`inputs.py`, `sheet_reader.py`).
+- The Quiz uses **only** structured material already present in the notes
+  (Q/A pairs, headings with bullets, definitions). If there is none, the report
+  says *“No study activity logged this week; no quiz generated.”*
+- Ambiguous assignment markers and blank/unknown job statuses are **flagged
+  for clarification, never guessed**.
+
+## 7. Manual GitHub test
+
+1. In your repo, **Actions → Weekly Personal Ops Report → Run workflow**.
+2. Expect: workflow success; exactly one Issue; title `Weekly Ops Report — YYYY-MM-DD`; body = the DEMO report.
+
+Do not claim a real Google Sheets / personal-data connection — there is none in
+this MVP by design, and none should be added until you have a real source.

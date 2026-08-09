@@ -1,3 +1,9 @@
+# Local-only secrets / environment
 .env
+
+# PERSONAL LOCAL INPUT DATA — never commit job/portfolio/study history.
+data/
+
+# Python
 __pycache__/
 *.py[cod]

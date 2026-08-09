@@ -1,18 +1,20 @@
-"""Weekly Personal Ops Agent — entry point.
+"""Weekly Personal Ops Coach — entry point (FL-06 → FL-07 agent).
 
 Pipeline (in order):
   1. Load environment variables          (local .env via python-dotenv)
-  2. Validate required configuration     (SHEET_CSV_URL, GITHUB_TOKEN, GITHUB_REPOSITORY)
+  2. Build configuration                 (inputs.py)
   3. Get today's date
-  4. Fetch the published CSV             (sheet_reader.py)
-  5. Parse rows                          (sheet_reader.py)
-  6. Detect overdue rows                 (report.py)
-  7. Detect invalid/missing dates        (report.py)
-  8. Count on-track rows                 (report.py)
-  9. Generate the report                 (report.py)
- 10. Create the GitHub Issue             (github_notify.py) — only if 3-9 succeeded
+  4. Read local input sources            (job CSV, FlyRank MD, Study MD)
+  5. Analyse job follow-ups              (report.py)
+  6. Analyse FlyRank progress            (report.py)
+  7. Build the consolidated weekly report (report.py)
+  8. Create the GitHub Issue             (github_notify.py) - only after
+     ALL of the above succeed, and only when not in DRY_RUN.
 
-The GitHub Issue is created ONLY after a valid report has been generated.
+Guarantees:
+  - No GitHub Issue is attempted when any input is missing/malformed or
+    when report generation fails.
+  - The agent never writes to any source file.
 """
 
 import datetime
@@ -22,62 +24,93 @@ import sys
 from dotenv import load_dotenv
 
 import github_notify
+import inputs
 import report
-import sheet_reader
-
-REQUIRED_ENV = ("SHEET_CSV_URL", "GITHUB_TOKEN", "GITHUB_REPOSITORY")
 
 
-def validate_config():
-    missing = [var for var in REQUIRED_ENV if not os.environ.get(var)]
-    if missing:
-        raise RuntimeError(
-            "Missing required environment variable(s): "
-            + ", ".join(missing)
-            + ". Provide them via a local .env file or GitHub Actions secrets."
-        )
+def run_pipeline(cfg):
+    """Load inputs and compute the report. Raises on missing/malformed input.
+
+    Pure data handling — no prints, no GitHub calls. Kept separate from the
+    CLI wrapper so it can be exercised by tests without creating Issues.
+    """
+    today = datetime.date.today()
+
+    jobs_rows = inputs.read_job_applications(cfg["jobs_file"])
+    flyrank_text = inputs.read_flyrank_markdown(cfg["flyrank_file"])
+    study_text = inputs.read_study_notes(cfg["study_file"])
+
+    jobs = report.parse_jobs(jobs_rows, today)
+    flyrank = report.parse_flyrank(flyrank_text)
+    quiz = report.extract_quiz(study_text)
+
+    sources = [
+        inputs.source_meta(cfg["jobs_file"]),
+        inputs.source_meta(cfg["flyrank_file"]),
+        inputs.source_meta(cfg["study_file"]),
+    ]
+
+    report_text = report.build_report(
+        today,
+        jobs,
+        flyrank,
+        quiz,
+        study_text,
+        sources,
+        demo_mode=cfg["demo_mode"],
+    )
+
+    return {"today": today, "text": report_text}
 
 
 def run():
-    # Local development only: loads .env if present. In GitHub Actions the
-    # workflow `env:` block provides the variables instead.
-    load_dotenv()
+    """CLI entry point. Returns a process exit code."""
+    # UTF-8 stdout so report emoji render on Windows consoles too.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+    load_dotenv()  # local dev only; GitHub Actions supplies env vars directly
+    cfg = inputs.load_config()
 
     try:
-        validate_config()
-        today = datetime.date.today()
-
-        rows = sheet_reader.read_sheet(os.environ["SHEET_CSV_URL"])
-        overdue, on_track_count, invalid = report.classify_rows(rows, today)
-        report_text = report.build_report(today, overdue, on_track_count, invalid)
+        result = run_pipeline(cfg)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
-    # Report generation succeeded — safe to print it and to create the Issue.
-    print(report_text)
-    print()
+    print(result["text"])
+
+    if cfg["dry_run"]:
+        print()
+        print("DRY RUN — report generated only; no GitHub Issue was created.")
+        return 0
+
+    token = cfg["github_token"]
+    repository = cfg["github_repository"]
+    if not token or not repository:
+        print(
+            "ERROR: GITHUB_TOKEN / GITHUB_REPOSITORY are not configured and "
+            "DRY_RUN is not set. Refusing to guess — set DRY_RUN=true for a "
+            "local report-only run or configure the GitHub env vars.",
+            file=sys.stderr,
+        )
+        return 1
 
     try:
         issue_url = github_notify.create_issue(
-            report_text,
-            today,
-            os.environ["GITHUB_TOKEN"],
-            os.environ["GITHUB_REPOSITORY"],
+            result["text"], result["today"], token, repository
         )
     except Exception as exc:
         print(f"ERROR: Could not create the GitHub Issue: {exc}", file=sys.stderr)
         return 1
 
+    print()
     print(f"GitHub Issue created: {issue_url}")
     return 0
 
 
 if __name__ == "__main__":
-    # Force UTF-8 output so report emoji render on Windows shells too.
-    for _stream in (sys.stdout, sys.stderr):
-        try:
-            _stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
     sys.exit(run())

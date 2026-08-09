@@ -8,7 +8,7 @@ on:
 
 permissions:
   contents: read
-  # GITHUB_TOKEN needs write access to issues so the run can create the Issue.
+  # The built-in GITHUB_TOKEN needs this to create Issues on your behalf.
   issues: write
 
 jobs:
@@ -29,6 +29,12 @@ jobs:
       - name: Generate report and create GitHub Issue
         run: python main.py
         env:
-          SHEET_CSV_URL: ${{ secrets.SHEET_CSV_URL }}
+          # GitHub Actions cannot access your laptop's private data/ files.
+          # This run therefore uses the committed TEST FIXTURE feed and marks
+          # the output as DEMO so the Issue is never mistaken for personal data.
+          JOB_APPLICATIONS_FILE: tests/fixtures/job_applications.csv
+          FLYRANK_PROGRESS_FILE: tests/fixtures/flyrank_progress.md
+          STUDY_NOTES_FILE: tests/fixtures/study_notes.md
+          DEMO_MODE: "true"
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
