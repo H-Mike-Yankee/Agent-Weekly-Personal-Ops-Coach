@@ -420,7 +420,13 @@ class TestEndToEndReport(unittest.TestCase):
             "study_file": fixture("study_notes.md"),
             "demo_mode": True,
         }
-        result = main.run_pipeline(cfg)
+        # The pipeline reads datetime.date.today(), so freeze the clock to the
+        # suite's fixed TODAY to keep the report deterministic and this
+        # assertion date-stable. Patching the module reference in main avoids
+        # mutating the immutable datetime.date builtin.
+        with mock.patch("main.datetime") as fake_datetime:
+            fake_datetime.date.today.return_value = TODAY
+            result = main.run_pipeline(cfg)
         text = result["text"]
 
         self.assertIn("Weekly Personal Ops Coach —", text)
@@ -433,7 +439,11 @@ class TestEndToEndReport(unittest.TestCase):
         ):
             self.assertIn(section, text)
         self.assertIn("Globex Inc [FIXTURE]", text)
-        self.assertIn("20 days overdue", text)
+        # Expected overdue days are derived from the frozen TODAY, never a
+        # hard-coded day count: Globex's follow-up date in the fixture is
+        # 2026-07-20.
+        globex_days_overdue = (TODAY - date(2026, 7, 20)).days
+        self.assertIn(f"{globex_days_overdue} days overdue", text)
         self.assertIn("DEMO", text.upper())
         self.assertNotIn("could not be checked".upper(), text.upper())
 
